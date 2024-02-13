@@ -1,8 +1,14 @@
 package bitcask_go
 
 import (
+	"errors"
+	"io"
 	"myRosedb/data"
 	"myRosedb/index"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -11,10 +17,47 @@ import (
 // DB bitcask 存储引擎
 type DB struct {
 	option     Options
+	fileIds    []int
 	mu         *sync.RWMutex
 	activeFile *data.DataFile            // 当前活跃数据文件，可以用于写入
 	olderFile  map[uint32]*data.DataFile // 旧的数据文件，只能用于读
 	index      index.Indexer             // 内存索引
+}
+
+// Open 打开存储引擎实例 bitcask
+func Open(options Options) (*DB, error) {
+	// 对用户传入的配置项进行校验
+	if err := checkOption(options); err != nil {
+		return nil, err
+	}
+
+	// 判断数据目录是否存在，如果不存在的话，就创建这个目录
+	if _, err := os.Stat(options.DirPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(options.DirPath, os.ModePerm); err != nil {
+			return nil, err
+		}
+	}
+
+	// 初始化 DB 实例结构体
+	db := &DB{
+		option:     options,
+		mu:         new(sync.RWMutex),
+		activeFile: new(data.DataFile),
+		olderFile:  make(map[uint32]*data.DataFile),
+		index:      index.NewIndexer(options.IndexType),
+	}
+
+	// 加载对应的数据文件
+	if err := db.OpenDataFiles(); err != nil {
+		return nil, err
+	}
+
+	// 从数据文件中加载索引
+	if err := db.loadIndexFromDataFiles(); err != nil {
+		return nil, err
+	}
+
+	return db, nil
 }
 
 // 写入 Key/Value 数据，Key 不能为空
@@ -74,7 +117,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 
 	// 根据偏移量读取对应的数据
-	logRecord, err := dataFile.ReadLogRecord(logRecordPos.Offset)
+	logRecord, _, err := dataFile.ReadLogRecord(logRecordPos.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -153,5 +196,113 @@ func (db *DB) setActiveDataFile() error {
 		return err
 	}
 	db.activeFile = dataFile
+	return nil
+}
+
+// 从磁盘中加载数据文件
+func (db *DB) OpenDataFiles() error {
+	// 读取目录中的所有条目
+	dirEntries, err := os.ReadDir(db.option.DirPath)
+	if err != nil {
+		return err
+	}
+
+	var fileIds []int
+	// 遍历目录中的所有文件，找到所有以 .data 结尾的文件
+	for _, entry := range dirEntries {
+		if strings.HasSuffix(entry.Name(), data.DataFileNameSuffix) {
+			// 000001.data，将文件id解析
+			splitNames := strings.Split(entry.Name(), ".")
+			// 包strconv实现了与基本数据类型的字符串表示形式之间的转换，Atoi相当于ParseInt（s,10,0），转换为int类型。
+			fileId, err := strconv.Atoi(splitNames[0])
+			// 数据目录有可能被损坏了
+			if err != nil {
+				return ErrDataDirectoryCorrupted
+			}
+
+			fileIds = append(fileIds, fileId)
+
+		}
+	}
+
+	// 对文件 id 进行排序，从小到大依次加载
+	sort.Ints(fileIds)
+	db.fileIds = fileIds
+
+	// 遍历每个文件 id，打开对应的数据文件
+	for i, fid := range fileIds {
+		dataFile, err := data.OpenDataFile(db.option.DirPath, uint32(fid))
+		if err != nil {
+			return err
+		}
+		if i == len(fileIds)-1 {
+			db.activeFile = dataFile
+		} else {
+			db.olderFile[uint32(fid)] = dataFile
+		}
+	}
+
+	return nil
+}
+
+func (db *DB) loadIndexFromDataFiles() error {
+	// 没有文件，说明数据库是空的，直接返回
+	if len(db.fileIds) == 0 {
+		return nil
+	}
+
+	// 遍历所有的文件id，处理文件中的记录
+	for i, fid := range db.fileIds {
+		var fileId = uint32(fid)
+		var dataFile *data.DataFile
+		if fileId == db.activeFile.FileID {
+			dataFile = db.activeFile
+		} else {
+			dataFile = db.olderFile[fileId]
+		}
+
+		var offset int64 = 0
+		for {
+			logRecord, size, err := dataFile.ReadLogRecord(offset)
+			if err != nil {
+				// EOF is the error returned by Read when no more input is available. 没有更多可读的了，就跳出本次循环
+				if err != io.EOF {
+					break
+				} else {
+					return err
+				}
+			}
+
+			// 构造内存索引并保存
+			logRecordPos := &data.LogRecordPos{fileId, offset}
+			if logRecord.Type == data.LogRecordDeleted {
+				// 都没加为什么要删？
+				db.index.Delete(logRecord.Key)
+			} else {
+				db.index.Put(logRecord.Key, logRecordPos)
+			}
+
+			// 递增 offset， 下一次从新的位置开始
+			offset += size
+		}
+
+		// 如果是当前活跃文件，更新这个文件的 WriteOff
+		if i == len(db.fileIds)-1 {
+			db.activeFile.WriteOff = offset
+		}
+	}
+
+	return nil
+
+}
+
+// 为什么定义函数， 不定义方法
+func checkOption(options Options) error {
+	if options.DirPath == "" {
+		return errors.New("database dir path is empty")
+	}
+	if options.DataFileSize <= 0 {
+		return errors.New("database data file size must greater than 0")
+	}
 	return nil
 }

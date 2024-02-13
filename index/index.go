@@ -16,6 +16,30 @@ type Indexer interface {
 	Delete(key []byte) (*data.LogRecordPos, bool)
 }
 
+type IndexType = int8
+
+const (
+	// BTree 索引
+	Btree IndexType = iota + 1
+
+	// ART 自适应基数索引
+	ART
+)
+
+// NewIndexer 根据类型初始化索引
+// 这里返回的 Indexer 类型为什么不是 *Indexer
+func NewIndexer(typ IndexType) Indexer {
+	switch typ {
+	case Btree:
+		return NewBTree()
+	case ART:
+		// todo
+		return nil
+	default:
+		panic("unsupported index type")
+	}
+}
+
 // *btree.BTree.ReplaceOrInsert()方法需要传入Item类型，Item是个接口，需要实现
 type Item struct {
 	key []byte
