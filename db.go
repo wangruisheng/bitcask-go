@@ -88,6 +88,35 @@ func (db *DB) Put(key []byte, value []byte) error {
 	return nil
 }
 
+// Delete 根据 key 删除对应的数据（直接追加 Type 为 Delete 的logRecord
+func (db *DB) Delete(key []byte) error {
+	// 判断 key 的有效性
+	if len(key) == 0 {
+		return ErrKeyIsEmpty
+	}
+
+	// 先检查 key 是否存在，如果不存在的话直接返回
+	if pos := db.index.Get(key); pos == nil {
+		return nil
+	}
+
+	// 构造 LogRecord，标识是被删除的
+	logRecord := &data.LogRecord{key: key, logRecordType: data.LogRecordDeleted}
+	// 写入到数据文件当中
+	_, err := db.appendLogRecord(logRecord)
+	if err != nil {
+		return err
+	}
+
+	// 从内存索引中将对应的 key删除
+	// 为什么老师的代码只有一个返回值
+	_, ok := db.index.Delete(key)
+	if !ok {
+		return ErrIndexUpdateFailed
+	}
+	return nil
+}
+
 // Get 根据 key 读取数据
 func (db *DB) Get(key []byte) ([]byte, error) {
 	db.mu.Lock()
@@ -277,6 +306,9 @@ func (db *DB) loadIndexFromDataFiles() error {
 			logRecordPos := &data.LogRecordPos{fileId, offset}
 			if logRecord.Type == data.LogRecordDeleted {
 				// 都没加为什么要删？
+				// 因为在重启数据库的时候，如果我们不对已删除的数据进行处理的话，内存索引是不会知道的，那么被删除的数据对应的索引仍然存在，会导致已经被删除的数据又存在了，数据会发生不一致
+				// 所以在启动 bitcask 实例，从数据文件加载索引的时候，需要对已删除的记录进行处理（因为数据文件中，同一个key的被删除记录总在加入记录之后，所以查找到删除type的时候，这个	key 之前肯定被加进来过）
+				// 如果判断到当前处理的记录是已删除的，则根据对应的key将内存索引中的数据删除
 				db.index.Delete(logRecord.Key)
 			} else {
 				db.index.Put(logRecord.Key, logRecordPos)
