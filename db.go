@@ -101,7 +101,7 @@ func (db *DB) Delete(key []byte) error {
 	}
 
 	// 构造 LogRecord，标识是被删除的
-	logRecord := &data.LogRecord{key: key, logRecordType: data.LogRecordDeleted}
+	logRecord := &data.LogRecord{Key: key, Type: data.LogRecordDeleted}
 	// 写入到数据文件当中
 	_, err := db.appendLogRecord(logRecord)
 	if err != nil {
