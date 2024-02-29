@@ -29,6 +29,7 @@ func (bt *BTree) Put(key []byte, pos *data.LogRecordPos) bool {
 	it := Item{key: key, pos: pos}
 	bt.lock.Lock()
 	// 为什么这里要加&
+	// 有重复的key应该会替换
 	bt.tree.ReplaceOrInsert(&it)
 	bt.lock.Unlock()
 	return true

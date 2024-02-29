@@ -16,11 +16,11 @@ import (
 
 // DB bitcask 存储引擎
 type DB struct {
-	option     Options
+	options    Options
 	fileIds    []int
 	mu         *sync.RWMutex
 	activeFile *data.DataFile            // 当前活跃数据文件，可以用于写入
-	olderFile  map[uint32]*data.DataFile // 旧的数据文件，只能用于读
+	olderFiles map[uint32]*data.DataFile // 旧的数据文件，只能用于读
 	index      index.Indexer             // 内存索引
 }
 
@@ -40,10 +40,10 @@ func Open(options Options) (*DB, error) {
 
 	// 初始化 DB 实例结构体
 	db := &DB{
-		option:     options,
-		mu:         new(sync.RWMutex),
-		activeFile: new(data.DataFile),
-		olderFile:  make(map[uint32]*data.DataFile),
+		options: options,
+		mu:      new(sync.RWMutex),
+		//activeFile: new(data.DataFile),
+		olderFiles: make(map[uint32]*data.DataFile),
 		index:      index.NewIndexer(options.IndexType),
 	}
 
@@ -130,7 +130,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	logRecordPos := db.index.Get(key)
 	// 如果 key 不在内存索引中，如果 key 不存在
 	if logRecordPos == nil {
-		return nil, ErrKeyNotFouond
+		return nil, ErrKeyNotFound
 	}
 
 	// 根据文件 id 找到对应的数据文件
@@ -138,7 +138,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	if db.activeFile.FileID == logRecordPos.Fid {
 		dataFile = db.activeFile
 	} else {
-		dataFile = db.olderFile[logRecordPos.Fid]
+		dataFile = db.olderFiles[logRecordPos.Fid]
 	}
 	// 数据文件为空
 	if dataFile == nil {
@@ -177,14 +177,14 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 	// 对写入数据 logRecord 进行编码
 	encRecord, size := data.EncodeLogRecord(logRecord)
 	// 如果写入的数据已经达到活跃文件的1阈值，则关闭活跃文件，并打开新的文件
-	if db.activeFile.WriteOff+size > db.option.DataFileSize {
+	if db.activeFile.WriteOff+size > db.options.DataFileSize {
 		// 先持久化数据文件，保证已有的数据持久化到磁盘当中
 		if err := db.activeFile.Sync(); err != nil {
 			return nil, err
 		}
 
 		// 当前活跃文件转换为旧的数据文件
-		db.olderFile[db.activeFile.FileID] = db.activeFile
+		db.olderFiles[db.activeFile.FileID] = db.activeFile
 
 		// 打开新的数据文件
 		if err := db.setActiveDataFile(); err != nil {
@@ -199,13 +199,13 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 	}
 
 	// 看用户是否每次进行写入后都想要进行持久化，根据用户配置决定
-	if db.option.SyncWrites {
+	if db.options.SyncWrites {
 		if err := db.activeFile.Sync(); err != nil {
 			return nil, err
 		}
 	}
 
-	// 构建内存索引1信息并返回
+	// 构建内存索引信息并返回
 	logRecordPos := &data.LogRecordPos{db.activeFile.FileID, writeOff}
 	return logRecordPos, nil
 }
@@ -220,7 +220,7 @@ func (db *DB) setActiveDataFile() error {
 	}
 
 	// 打开新的数据文件
-	dataFile, err := data.OpenDataFile(db.option.DirPath, initialFileID)
+	dataFile, err := data.OpenDataFile(db.options.DirPath, initialFileID)
 	if err != nil {
 		return err
 	}
@@ -231,7 +231,7 @@ func (db *DB) setActiveDataFile() error {
 // 从磁盘中加载数据文件
 func (db *DB) OpenDataFiles() error {
 	// 读取目录中的所有条目
-	dirEntries, err := os.ReadDir(db.option.DirPath)
+	dirEntries, err := os.ReadDir(db.options.DirPath)
 	if err != nil {
 		return err
 	}
@@ -260,14 +260,15 @@ func (db *DB) OpenDataFiles() error {
 
 	// 遍历每个文件 id，打开对应的数据文件
 	for i, fid := range fileIds {
-		dataFile, err := data.OpenDataFile(db.option.DirPath, uint32(fid))
+		dataFile, err := data.OpenDataFile(db.options.DirPath, uint32(fid))
 		if err != nil {
 			return err
 		}
+		// 把最新的（id最大的）文件设置为活跃文件
 		if i == len(fileIds)-1 {
 			db.activeFile = dataFile
 		} else {
-			db.olderFile[uint32(fid)] = dataFile
+			db.olderFiles[uint32(fid)] = dataFile
 		}
 	}
 
@@ -287,7 +288,7 @@ func (db *DB) loadIndexFromDataFiles() error {
 		if fileId == db.activeFile.FileID {
 			dataFile = db.activeFile
 		} else {
-			dataFile = db.olderFile[fileId]
+			dataFile = db.olderFiles[fileId]
 		}
 
 		var offset int64 = 0
@@ -295,7 +296,8 @@ func (db *DB) loadIndexFromDataFiles() error {
 			logRecord, size, err := dataFile.ReadLogRecord(offset)
 			if err != nil {
 				// EOF is the error returned by Read when no more input is available. 没有更多可读的了，就跳出本次循环
-				if err != io.EOF {
+				// ??? 这里写错了，应该是==，原来写成了!=
+				if err == io.EOF {
 					break
 				} else {
 					return err

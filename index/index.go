@@ -20,7 +20,7 @@ type IndexType = int8
 
 const (
 	// BTree 索引
-	Btree IndexType = iota + 1
+	Btree IndexType = iota
 
 	// ART 自适应基数索引
 	ART
@@ -46,6 +46,7 @@ type Item struct {
 	pos *data.LogRecordPos
 }
 
+// 定义 btree 中的比较方法
 func (ai *Item) Less(bi btree.Item) bool {
 
 	// 为什么这里不能用（bi.(Item).key）
