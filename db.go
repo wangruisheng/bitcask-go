@@ -60,6 +60,38 @@ func Open(options Options) (*DB, error) {
 	return db, nil
 }
 
+// Close 关闭数据库
+func (db *DB) Close() error {
+	if db.activeFile == nil {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// 关闭当前活跃文件
+	if err := db.activeFile.Close(); err != nil {
+		return err
+	}
+
+	// 关闭旧的数据文件
+	for _, file := range db.olderFiles {
+		if err := file.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Sync 持久化数据文件
+func (db *DB) Sync() error {
+	if db.activeFile == nil {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	return db.activeFile.Sync()
+}
+
 // 写入 Key/Value 数据，Key 不能为空
 func (db *DB) Put(key []byte, value []byte) error {
 	// 先判断 key 是否无效
@@ -134,11 +166,49 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 
 	// 根据文件 id 找到对应的数据文件
+	return db.getValueByPosition(logRecordPos)
+}
+
+// ListKeys 获取数据库中所有的 key
+func (db *DB) ListKeys() [][]byte {
+	iterator := db.index.Iterator(false)
+	keys := make([][]byte, db.index.Size())
+	var idx int
+	for iterator.Rewind(); iterator.Valid(); iterator.Next() {
+		keys[idx] = iterator.Key()
+		idx++
+	}
+	return keys
+}
+
+// 获取所有的数据，并执行用户指定的操作，函数返回 false 时终止遍历
+func (db *DB) Fold(fn func(key []byte, value []byte) bool) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	// ？？？为什么不用 db.NewIterator()
+	iterator := db.index.Iterator(false)
+	for iterator.Rewind(); iterator.Valid(); iterator.Next() {
+		value, err := db.getValueByPosition(iterator.Value())
+		if err != nil {
+			return err
+		}
+		// 如果函数返回false，则结束整个遍历
+		if !fn(iterator.Key(), value) {
+			break
+		}
+	}
+	return nil
+}
+
+// 将从索引位置获取 value 数据的方法提取出来
+func (db *DB) getValueByPosition(pos *data.LogRecordPos) ([]byte, error) {
+	// 根据文件 id 找到对应的数据文件
 	var dataFile *data.DataFile
-	if db.activeFile.FileID == logRecordPos.Fid {
+	if db.activeFile.FileID == pos.Fid {
 		dataFile = db.activeFile
 	} else {
-		dataFile = db.olderFiles[logRecordPos.Fid]
+		dataFile = db.olderFiles[pos.Fid]
 	}
 	// 数据文件为空
 	if dataFile == nil {
@@ -146,16 +216,18 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 
 	// 根据偏移量读取对应的数据
-	logRecord, _, err := dataFile.ReadLogRecord(logRecordPos.Offset)
+	logRecord, _, err := dataFile.ReadLogRecord(pos.Offset)
 	if err != nil {
 		return nil, err
 	}
 
+	// 按理来说在加载索引的时候，就已经从btree中删除掉了，所以应该找不到改key对应的value。应该不用从这里再判断一次
 	if logRecord.Type == data.LogRecordDeleted {
 		return nil, err
 	}
 
 	return logRecord.Value, nil
+
 }
 
 // 定义 LogRecord 写入磁盘方法，方法不用大写，因为是内部方法
