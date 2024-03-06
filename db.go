@@ -6,6 +6,7 @@ import (
 	"myRosedb/data"
 	"myRosedb/index"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,9 +50,9 @@ func Open(options Options) (*DB, error) {
 		index:      index.NewIndexer(options.IndexType),
 	}
 	// 加载 merge 数据目录
-	//if err := db.loadMergeFile(); err != nil {
-	//	return nil, err
-	//}
+	if err := db.loadMergeFile(); err != nil {
+		return nil, err
+	}
 
 	// 加载对应的数据文件
 	if err := db.OpenDataFiles(); err != nil {
@@ -60,9 +61,9 @@ func Open(options Options) (*DB, error) {
 
 	// 从 hint 索引文件中加载索引
 	// 先查看是否有索引文件
-	//if err := db.loadIndexFromHintFile(); err != nil {
-	//	return nil, err
-	//}
+	if err := db.loadIndexFromHintFile(); err != nil {
+		return nil, err
+	}
 
 	// 从数据文件中加载索引
 	if err := db.loadIndexFromDataFiles(); err != nil {
@@ -375,16 +376,16 @@ func (db *DB) loadIndexFromDataFiles() error {
 	}
 
 	// 查看是否发生过 merge（如果比nonMergeFileId打的话才要加载索引）
-	//hasMerge, nonMergeFileId := false, uint32(0)
-	//mergeFinFileName := filepath.Join(db.options.DirPath, data.MergeFinishedFileName)
-	//if _, err := os.Stat(mergeFinFileName); err == nil {
-	//	fid, err := db.getNonMergeFileID(db.options.DirPath)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	hasMerge = true
-	//	nonMergeFileId = fid
-	//}
+	hasMerge, nonMergeFileId := false, uint32(0)
+	mergeFinFileName := filepath.Join(db.options.DirPath, data.MergeFinishedFileName)
+	if _, err := os.Stat(mergeFinFileName); err == nil {
+		fid, err := db.getNonMergeFileID(db.options.DirPath)
+		if err != nil {
+			return err
+		}
+		hasMerge = true
+		nonMergeFileId = fid
+	}
 
 	// 新定一个更新内存索引的方法，因为要重复使用
 	updateIndex := func(key []byte, typ data.LogRecordType, pos *data.LogRecordPos) {
@@ -408,9 +409,9 @@ func (db *DB) loadIndexFromDataFiles() error {
 	for i, fid := range db.fileIds {
 		var fileId = uint32(fid)
 		// 如果比最近未参与 merge 的文件 id 更小，则说明已经从 Hint 文件中加载索引了
-		//if hasMerge && fileId < nonMergeFileId {
-		//	continue
-		//}
+		if hasMerge && fileId < nonMergeFileId {
+			continue
+		}
 		var dataFile *data.DataFile
 		if fileId == db.activeFile.FileID {
 			dataFile = db.activeFile
