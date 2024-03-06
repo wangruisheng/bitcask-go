@@ -22,6 +22,8 @@ type DB struct {
 	activeFile *data.DataFile            // 当前活跃数据文件，可以用于写入
 	olderFiles map[uint32]*data.DataFile // 旧的数据文件，只能用于读
 	index      index.Indexer             // 内存索引
+	seqNo      uint64                    // 事务序列号，全局递增
+	isMerging  bool                      // 是否正在 merge
 }
 
 // Open 打开存储引擎实例 bitcask
@@ -46,11 +48,21 @@ func Open(options Options) (*DB, error) {
 		olderFiles: make(map[uint32]*data.DataFile),
 		index:      index.NewIndexer(options.IndexType),
 	}
+	// 加载 merge 数据目录
+	//if err := db.loadMergeFile(); err != nil {
+	//	return nil, err
+	//}
 
 	// 加载对应的数据文件
 	if err := db.OpenDataFiles(); err != nil {
 		return nil, err
 	}
+
+	// 从 hint 索引文件中加载索引
+	// 先查看是否有索引文件
+	//if err := db.loadIndexFromHintFile(); err != nil {
+	//	return nil, err
+	//}
 
 	// 从数据文件中加载索引
 	if err := db.loadIndexFromDataFiles(); err != nil {
@@ -93,6 +105,7 @@ func (db *DB) Sync() error {
 }
 
 // 写入 Key/Value 数据，Key 不能为空
+// db 中的put和delete没有对key和seqNo进行编码，因为他是非事务的
 func (db *DB) Put(key []byte, value []byte) error {
 	// 先判断 key 是否无效
 	if len(key) == 0 {
@@ -101,13 +114,13 @@ func (db *DB) Put(key []byte, value []byte) error {
 
 	// 构造 LogRecord 结构体
 	logRecord := &data.LogRecord{
-		Key:   key,
+		Key:   logRecordKeyWithSeq(key, nonTransactionSeqNo),
 		Value: value,
 		Type:  data.LogRecordNormal,
 	}
 
 	// 追加数据写入磁盘文件
-	pos, err := db.appendLogRecord(logRecord)
+	pos, err := db.appendLogRecordWithLock(logRecord)
 	if err != nil {
 		return err
 	}
@@ -128,14 +141,18 @@ func (db *DB) Delete(key []byte) error {
 	}
 
 	// 先检查 key 是否存在，如果不存在的话直接返回
+	// 从索引中拿，索引中的key是不带事务号的
 	if pos := db.index.Get(key); pos == nil {
 		return nil
 	}
 
 	// 构造 LogRecord，标识是被删除的
-	logRecord := &data.LogRecord{Key: key, Type: data.LogRecordDeleted}
+	logRecord := &data.LogRecord{
+		Key:  logRecordKeyWithSeq(key, nonTransactionSeqNo),
+		Type: data.LogRecordDeleted,
+	}
 	// 写入到数据文件当中
-	_, err := db.appendLogRecord(logRecord)
+	_, err := db.appendLogRecordWithLock(logRecord)
 	if err != nil {
 		return err
 	}
@@ -230,12 +247,16 @@ func (db *DB) getValueByPosition(pos *data.LogRecordPos) ([]byte, error) {
 
 }
 
+// 因为在batch中Commit()调用了appenLogRecord方法，但Commit()已经加锁了，所以需要一个不加锁的appendLogRecord，就单独将加锁的方法提取出来
+func (db *DB) appendLogRecordWithLock(logRecord *data.LogRecord) (*data.LogRecordPos, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	return db.appendLogRecord(logRecord)
+}
+
 // 定义 LogRecord 写入磁盘方法，方法不用大写，因为是内部方法
 // 返回内存索引信息
 func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, error) {
-	db.mu.Lock()
-
-	defer db.mu.Unlock()
 
 	// 判断当前活跃数据文件是否存在，因为数据库在没有写入的时候是没有文件生成的
 	// 如果为空则初始化数据文件
@@ -353,9 +374,43 @@ func (db *DB) loadIndexFromDataFiles() error {
 		return nil
 	}
 
+	// 查看是否发生过 merge（如果比nonMergeFileId打的话才要加载索引）
+	//hasMerge, nonMergeFileId := false, uint32(0)
+	//mergeFinFileName := filepath.Join(db.options.DirPath, data.MergeFinishedFileName)
+	//if _, err := os.Stat(mergeFinFileName); err == nil {
+	//	fid, err := db.getNonMergeFileID(db.options.DirPath)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	hasMerge = true
+	//	nonMergeFileId = fid
+	//}
+
+	// 新定一个更新内存索引的方法，因为要重复使用
+	updateIndex := func(key []byte, typ data.LogRecordType, pos *data.LogRecordPos) {
+		var ok bool
+		if typ == data.LogRecordDeleted {
+			_, ok = db.index.Delete(key)
+		} else {
+			ok = db.index.Put(key, pos)
+		}
+		if !ok {
+			panic("failed to update index at startup")
+		}
+	}
+
+	// 暂存事务数据
+	// uint64 是事务的id，如果判断到事务的id可以提交了，就将事务取出来，更新内存索引
+	transcationRecords := make(map[uint64][]*data.TranscationRecord)
+	var currentSeqNo = nonTransactionSeqNo
+
 	// 遍历所有的文件id，处理文件中的记录
 	for i, fid := range db.fileIds {
 		var fileId = uint32(fid)
+		// 如果比最近未参与 merge 的文件 id 更小，则说明已经从 Hint 文件中加载索引了
+		//if hasMerge && fileId < nonMergeFileId {
+		//	continue
+		//}
 		var dataFile *data.DataFile
 		if fileId == db.activeFile.FileID {
 			dataFile = db.activeFile
@@ -378,15 +433,44 @@ func (db *DB) loadIndexFromDataFiles() error {
 
 			// 构造内存索引并保存
 			logRecordPos := &data.LogRecordPos{fileId, offset}
-			if logRecord.Type == data.LogRecordDeleted {
-				// 都没加为什么要删？
-				// 因为在重启数据库的时候，如果我们不对已删除的数据进行处理的话，内存索引是不会知道的，那么被删除的数据对应的索引仍然存在，会导致已经被删除的数据又存在了，数据会发生不一致
-				// 所以在启动 bitcask 实例，从数据文件加载索引的时候，需要对已删除的记录进行处理（因为数据文件中，同一个key的被删除记录总在加入记录之后，所以查找到删除type的时候，这个	key 之前肯定被加进来过）
-				// 如果判断到当前处理的记录是已删除的，则根据对应的key将内存索引中的数据删除
-				db.index.Delete(logRecord.Key)
+
+			// 从数据文件中加载索引的时候，要读到最后一位提交完成标识再更新入索引
+			// 解析 key，拿到事务序列号（因为key是经过 key+seqNo编码的）
+			realKey, seqNo := parseLogRecordKey(logRecord.Key)
+			if seqNo == nonTransactionSeqNo {
+				// 非事务操作，直接更新内存索引
+				updateIndex(realKey, logRecord.Type, logRecordPos)
 			} else {
-				db.index.Put(logRecord.Key, logRecordPos)
+				// 事务完成，对应的 seq no 的数据可以更新到内存索引中
+				if logRecord.Type == data.LogRecordTxnFinished {
+					for _, txnRecord := range transcationRecords[seqNo] {
+						updateIndex(txnRecord.Record.Key, txnRecord.Record.Type, txnRecord.Pos)
+					}
+					delete(transcationRecords, seqNo)
+				} else {
+					// batch当中写入的数据，但是还没有判断是否提交成功，则先暂存起来
+					logRecord.Key = realKey
+					transcationRecords[seqNo] = append(transcationRecords[seqNo], &data.TranscationRecord{
+						Record: logRecord,
+						Pos:    logRecordPos,
+					})
+				}
 			}
+			// 更新事务序列号
+			// 保证db拿到最新的序列号
+			if seqNo > currentSeqNo {
+				currentSeqNo = seqNo
+			}
+
+			//if logRecord.Type == data.LogRecordDeleted {
+			//	// 都没加为什么要删？
+			//	// 因为在重启数据库的时候，如果我们不对已删除的数据进行处理的话，内存索引是不会知道的，那么被删除的数据对应的索引仍然存在，会导致已经被删除的数据又存在了，数据会发生不一致
+			//	// 所以在启动 bitcask 实例，从数据文件加载索引的时候，需要对已删除的记录进行处理（因为数据文件中，同一个key的被删除记录总在加入记录之后，所以查找到删除type的时候，这个	key 之前肯定被加进来过）
+			//	// 如果判断到当前处理的记录是已删除的，则根据对应的key将内存索引中的数据删除
+			//	db.index.Delete(logRecord.Key)
+			//} else {
+			//	db.index.Put(logRecord.Key, logRecordPos)
+			//}
 
 			// 递增 offset， 下一次从新的位置开始
 			offset += size
@@ -397,6 +481,8 @@ func (db *DB) loadIndexFromDataFiles() error {
 			db.activeFile.WriteOff = offset
 		}
 	}
+	// 更新事务序列号
+	db.seqNo = currentSeqNo
 
 	return nil
 

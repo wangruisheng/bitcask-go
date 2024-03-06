@@ -11,6 +11,7 @@ type LogRecordType = byte
 const (
 	LogRecordNormal LogRecordType = iota
 	LogRecordDeleted
+	LogRecordTxnFinished
 )
 
 // crc type keySize valueSize
@@ -41,6 +42,12 @@ type logRecordHeader struct {
 type LogRecordPos struct {
 	Fid    uint32 // 文件 id，表示将数据存储到了哪个文件当中
 	Offset int64  // 偏移，表示将数据存储到了数据文件的哪个位置
+}
+
+// 暂存的事务相关的数据
+type TranscationRecord struct {
+	Record *LogRecord
+	Pos    *LogRecordPos
 }
 
 // 对 LogRecord（+ logRecordHeader） 进行编码，返回字节数组以及长度
@@ -85,6 +92,24 @@ func EncodeLogRecord(logRecord *LogRecord) ([]byte, int64) {
 
 	return encBytes, int64(size)
 }
+
+// EncodeLogRecordPos 对位置进行编码（用来存入hint文件
+//func EncodeLogRecordPos(pos *LogRecordPos) []byte {
+//	buf := make([]byte, binary.MaxVarintLen32+binary.MaxVarintLen64)
+//	var index = 0
+//	index += binary.PutVarint(buf[index:], int64(pos.Fid))
+//	index += binary.PutVarint(buf[index:], pos.Offset)
+//	return buf[:index]
+//}
+//
+//// DecodeLogRecordPos EncodeLogRecordPos编码过后，从 hint 文件中取出时，要进行解码
+//func DecodeLogRecordPos(buf []byte) *LogRecordPos {
+//	var index = 0
+//	fileId, n := binary.Varint(buf[index:])
+//	index += n
+//	offset, _ := binary.Varint(buf[index:])
+//	return &LogRecordPos{Fid: uint32(fileId), Offset: offset}
+//}
 
 // 对字节数组中的 Header 信息进行解码
 // 此时还没有进行 crc 校验
