@@ -13,7 +13,11 @@ var (
 	ErrInvalidCRC = errors.New("invalid crc value, log record maybe corrupted")
 )
 
-const DataFileNameSuffix = ".data"
+const (
+	DataFileNameSuffix    = ".data"
+	HintFileName          = "hint-index"
+	MergeFinishedFileName = "merge-finished"
+)
 
 // 创建 数据文件 结构体
 type DataFile struct {
@@ -26,7 +30,29 @@ type DataFile struct {
 func OpenDataFile(dirPath string, fileId uint32) (*DataFile, error) {
 	//具体来说，%09d中的%d是用于表示整数的占位符，而09表示将整数格式化为9位宽度，并在左侧用零进行填充（如果需要的话）。
 	//例如，假设有一个整数值为123，则使用%09d格式化后的结果为"000000123"，宽度为9位，不足的位数用零进行填充。
-	fileName := filepath.Join(dirPath, fmt.Sprintf("%09d", fileId)+DataFileNameSuffix)
+	fileName := GetDataFileName(dirPath, fileId)
+	return newDataFile(fileName, fileId)
+}
+
+// OpenHintFile 打开 Hint 索引文件
+func OpenHintFile(dirPath string) (*DataFile, error) {
+	fileName := filepath.Join(dirPath, HintFileName)
+	return newDataFile(fileName, 0)
+}
+
+// OpenMergeFinishedFile 打开标识 merge 完成的文件
+func OpenMergeFinishedFile(dirPath string) (*DataFile, error) {
+	fileName := filepath.Join(dirPath, MergeFinishedFileName)
+	return newDataFile(fileName, 0)
+}
+
+// 拿到数据文件的名字
+func GetDataFileName(dirPath string, fileId uint32) string {
+	// filepath.Join(dirPath, fmt.Sprintf("%09d", fileId)+DataFileNameSuffix)
+	return filepath.Join(dirPath, fmt.Sprintf("#{fileId}", fileId)+DataFileNameSuffix)
+}
+
+func newDataFile(fileName string, fileId uint32) (*DataFile, error) {
 	// 初始化 IOManager 管理器接口
 	ioManager, err := fio.NewIOManger(fileName)
 	if err != nil {
@@ -107,6 +133,17 @@ func (df *DataFile) Write(buf []byte) error {
 	}
 	df.WriteOff += int64(n)
 	return nil
+}
+
+// WriteHintRecord 写入索引信息到 hint 文件中
+func (df *DataFile) WriteHintRecord(key []byte, pos *LogRecordPos) error {
+	record := &LogRecord{
+		Key: key,
+		// value 就是位置索引信息
+		Value: EncodeLogRecordPos(pos),
+	}
+	encRecord, _ := EncodeLogRecord(record)
+	return df.Write(encRecord)
 }
 
 // 持久化 数据文件
