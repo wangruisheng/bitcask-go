@@ -22,6 +22,8 @@ func TestDB_WriteBatch(t *testing.T) {
 	wb := db.NewWriteBatch(DefaultWriteBatchOptions)
 	err = wb.Put(utils.GetTestKey(1), utils.RandomValue(10))
 	assert.Nil(t, err)
+	value, err := db.Get(utils.GetTestKey(1))
+	t.Log("value,err =", value, err)
 	err = wb.Delete(utils.GetTestKey(2))
 	assert.Nil(t, err)
 

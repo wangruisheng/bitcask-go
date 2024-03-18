@@ -49,16 +49,19 @@ func destroyDB(db *DB) {
 
 func TestOpen(t *testing.T) {
 	opts := DefaultOptions
+	// opts.IndexType = BPlusTree
+	opts.IndexType = ART
 	dir, _ := os.MkdirTemp("", "bitcask-go")
 	opts.DirPath = dir
 	db, err := Open(opts)
-	defer destroyDB(db)
+	// defer destroyDB(db)
 	assert.Nil(t, err)
 	assert.NotNil(t, db)
 }
 
 func TestDB_Put(t *testing.T) {
 	opts := DefaultOptions
+	opts.IndexType = ART
 	dir, _ := os.MkdirTemp("", "bitcask-go-put")
 	opts.DirPath = dir
 	opts.DataFileSize = 64 * 1024 * 1024
@@ -120,6 +123,7 @@ func TestDB_Put(t *testing.T) {
 
 func TestDB_Get(t *testing.T) {
 	opts := DefaultOptions
+	opts.IndexType = BPlusTree
 	dir, _ := os.MkdirTemp("", "bitcask-go-get")
 	opts.DirPath = dir
 	opts.DataFileSize = 64 * 1024 * 1024
@@ -192,6 +196,7 @@ func TestDB_Get(t *testing.T) {
 
 func TestDB_Delete(t *testing.T) {
 	opts := DefaultOptions
+	opts.IndexType = BPlusTree
 	dir, _ := os.MkdirTemp("", "bitcask-go-delete")
 	opts.DirPath = dir
 	opts.DataFileSize = 64 * 1024 * 1024
@@ -246,6 +251,7 @@ func TestDB_Delete(t *testing.T) {
 
 func TestDB_ListKeys(t *testing.T) {
 	opts := DefaultOptions
+	opts.IndexType = BPlusTree
 	dir, _ := os.MkdirTemp("", "bitcask-go-delete")
 	opts.DirPath = dir
 	opts.DataFileSize = 64 * 1024 * 1024
@@ -308,6 +314,7 @@ func TestDB_Fold(t *testing.T) {
 }
 
 func TestDB_Close(t *testing.T) {
+	//The process cannot access the file because it is being used by another process
 	opts := DefaultOptions
 	dir, _ := os.MkdirTemp("", "bitcask-go-delete")
 	opts.DirPath = dir
@@ -326,6 +333,7 @@ func TestDB_Sync(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "bitcask-go-syc")
 	opts.DirPath = dir
 	db, err := Open(opts)
+	// The process cannot access the file because it is being used by another process
 	defer destroyDB(db)
 	assert.Nil(t, err)
 	assert.NotNil(t, db)

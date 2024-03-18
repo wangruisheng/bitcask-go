@@ -17,6 +17,7 @@ func TestDB_NewIterator(t *testing.T) {
 	assert.NotNil(t, db)
 
 	iterator := db.NewIterator(DefaultIteratorOptions)
+	defer iterator.Close()
 	assert.NotNil(t, iterator)
 	t.Log(iterator.Valid())
 	assert.Equal(t, false, iterator.Valid())
@@ -36,6 +37,7 @@ func TestDB_Iterator_One_Value(t *testing.T) {
 	assert.Nil(t, err)
 
 	iterator := db.NewIterator(DefaultIteratorOptions)
+	defer iterator.Close()
 	assert.NotNil(t, iterator)
 	t.Log(iterator.Valid())
 	t.Log(string(iterator.Key()))
@@ -62,6 +64,7 @@ func TestDB_Iterator_Multi_Value(t *testing.T) {
 	err = db.Put([]byte("dkey4"), utils.RandomValue(10))
 
 	iter1 := db.NewIterator(DefaultIteratorOptions)
+	defer iter1.Close()
 	for iter1.Rewind(); iter1.Valid(); iter1.Next() {
 		t.Log("key = ", string(iter1.Key()))
 	}

@@ -43,6 +43,9 @@ const (
 
 	// ART Adaptive Radix Tree 自适应基数树索引
 	ART
+
+	// BPlusTree B+ 树索引，将索引储存到磁盘上
+	BPlusTree
 )
 
 var DefaultOptions = Options{

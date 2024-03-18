@@ -13,11 +13,13 @@ type Indexer interface {
 	// Get 根据 key 取出对应索引位置的信息
 	Get(key []byte) *data.LogRecordPos
 	// Delete 根据 key 删除对应索引位置的信息
-	Delete(key []byte) (*data.LogRecordPos, bool)
+	Delete(key []byte) bool
 	// Size 索引中的数据量
 	Size() int
 	// Iterator 返回索引迭代器，用来逐个获取Item（key和pos）（用户看不到Item）
 	Iterator(reverse bool) Iterator
+	// 关闭索引，因为B+树相当于一个bblot数据库实例，所以如果这里不关闭数据库的话，再打开可能会堵住，因为bblot是单线程的
+	Close() error
 }
 
 type IndexType = int8
@@ -28,17 +30,22 @@ const (
 
 	// ART 自适应基数索引
 	ART
+
+	// BPTree B+ 树索引
+	BPTree
 )
 
 // NewIndexer 根据类型初始化索引
 // 这里返回的 Indexer 类型为什么不是 *Indexer
-func NewIndexer(typ IndexType) Indexer {
+func NewIndexer(typ IndexType, dirPath string, sync bool) Indexer {
 	switch typ {
 	case Btree:
 		return NewBTree()
 	case ART:
 		// todo
-		return nil
+		return NewART()
+	case BPTree:
+		return NewBPlusTree(dirPath, sync)
 	default:
 		panic("unsupported index type")
 	}

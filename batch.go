@@ -22,6 +22,10 @@ type WriteBatch struct {
 
 // NewWriteBatch 初始化 WriteBach 的方法
 func (db *DB) NewWriteBatch(opts WriteBatchOptions) *WriteBatch {
+	// 只有当是 B+ 树，并且存储事务序列号不存在，并且不是第一次初始化，都禁用batch
+	if db.options.IndexType == BPlusTree && !db.seqNoFileExists && !db.isInital {
+		panic("cannot use write batch, seq no file not exists")
+	}
 	return &WriteBatch{
 		options:       opts,
 		mu:            new(sync.RWMutex),
@@ -59,6 +63,7 @@ func (wb *WriteBatch) Delete(key []byte) error {
 		if wb.pendingWrites[string(key)] != nil {
 			delete(wb.pendingWrites, string(key))
 		}
+		return nil
 	}
 
 	//暂存 LogRecord
