@@ -1,10 +1,10 @@
 package bitcask_go
 
 import (
+	"fmt"
 	"io"
 	"myRosedb/data"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -157,9 +157,10 @@ func (db *DB) Merge() error {
 // 拿到目前数据目录路径，在该目录中添加 merge 文件夹
 func (db *DB) getMergePath() string {
 	// path.Dir()表示拿到父目录，path.Dir()表示去除多余的斜杠
-	dir := path.Dir(path.Clean(db.options.DirPath))
+	dir := filepath.Dir(filepath.Clean(db.options.DirPath))
 	// Base returns the last element of path
-	base := path.Base(db.options.DirPath)
+	base := filepath.Base(db.options.DirPath)
+	fmt.Println(filepath.Join(dir, base+mergeDirName))
 	return filepath.Join(dir, base+mergeDirName)
 }
 

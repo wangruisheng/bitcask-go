@@ -12,9 +12,15 @@ type Options struct {
 	// 每次写数据是否持久化
 	SyncWrites bool
 
+	// 累计写到多少字节后进行持久化
+	BytesPerSync uint
+
 	// 索引类型
 	// 这里直接用index包的不行吗，为什么还要再定义一遍
 	IndexType IndexerType
+
+	// 启动时是否使用 MMap 进行加载
+	MMapAtStartup bool
 }
 
 // IteratorOptions 索引迭代器配置项
@@ -49,10 +55,12 @@ const (
 )
 
 var DefaultOptions = Options{
-	DirPath:      os.TempDir(),
-	DataFileSize: 256 * 1024 * 1024, // 256MB
-	SyncWrites:   false,
-	IndexType:    BTree,
+	DirPath:       os.TempDir(),
+	DataFileSize:  256 * 1024 * 1024, // 256MB
+	SyncWrites:    false,
+	BytesPerSync:  0, // 默认不开启
+	IndexType:     BTree,
+	MMapAtStartup: true,
 }
 
 var DefaultIteratorOptions = IteratorOptions{

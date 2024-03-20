@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func destoryFile(name string) {
+func destroyFile(name string) {
 	if err := os.RemoveAll(name); err != nil {
 		panic(err)
 	}

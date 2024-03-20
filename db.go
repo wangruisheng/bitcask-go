@@ -3,8 +3,10 @@ package bitcask_go
 import (
 	"errors"
 	"fmt"
+	"github.com/gofrs/flock"
 	"io"
 	"myRosedb/data"
+	"myRosedb/fio"
 	"myRosedb/index"
 	"os"
 	"path/filepath"
@@ -16,7 +18,10 @@ import (
 
 // 这个文件主要存放面相用户的操作接口
 
-const seqNoKey = "seq.no"
+const (
+	seqNoKey     = "seq.no"
+	fileLockName = "flock"
+)
 
 // DB bitcask 存储引擎
 type DB struct {
@@ -30,6 +35,8 @@ type DB struct {
 	isMerging       bool                      // 是否正在 merge
 	seqNoFileExists bool                      // 事务序列号是否存在，用于判断在b+树模式下，是否要禁用掉batch
 	isInital        bool                      // 是否是第一次初始化此数据目录
+	fileLock        *flock.Flock              // 文件锁保证多进程之间的互斥
+	bytesWrite      uint                      // 累计写了多少个字节
 }
 
 // Open 打开存储引擎实例 bitcask
@@ -48,6 +55,18 @@ func Open(options Options) (*DB, error) {
 			return nil, err
 		}
 	}
+
+	// 判断当前数据目录是否正在使用
+	fileLock := flock.New(filepath.Join(options.DirPath, fileLockName))
+	// 获取读锁（错误），应该获取写锁（互斥锁），因为读锁多进程之间可以共享
+	hold, err := fileLock.TryLock()
+	if err != nil {
+		return nil, err
+	}
+	if !hold {
+		return nil, ErrDatabaseIsUsing
+	}
+
 	entries, err := os.ReadDir(options.DirPath)
 	if err != nil {
 		return nil, err
@@ -64,18 +83,23 @@ func Open(options Options) (*DB, error) {
 		olderFiles: make(map[uint32]*data.DataFile),
 		index:      index.NewIndexer(options.IndexType, options.DirPath, options.SyncWrites),
 		isInital:   isInitial,
+		fileLock:   fileLock,
 	}
 	// 加载 merge 数据目录
 	// 有bug，报错
-	//if err := db.loadMergeFile(); err != nil {
-	//	return nil, err
-	//}
-
-	// 加载对应的数据文件
-	if err := db.OpenDataFiles(); err != nil {
+	if err := db.loadMergeFile(); err != nil {
 		return nil, err
 	}
 
+	// 加载对应的数据文件
+	if err := db.loadDataFiles(); err != nil {
+		return nil, err
+	}
+
+	// 重置 IO 类型为标准文件
+	if db.options.MMapAtStartup {
+		db.resetIoType()
+	}
 	// 如果索引类型为 b+ 树，则不需要加载索引，因为已经持久化到磁盘中了
 	if options.IndexType != BPlusTree {
 		// 从 hint 索引文件中加载索引
@@ -109,6 +133,11 @@ func Open(options Options) (*DB, error) {
 
 // Close 关闭数据库
 func (db *DB) Close() error {
+	defer func() {
+		if err := db.fileLock.Unlock(); err != nil {
+			panic(fmt.Sprintf("filed to unlock the directory,%v", err))
+		}
+	}()
 	if db.activeFile == nil {
 		return nil
 	}
@@ -349,10 +378,20 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 		return nil, err
 	}
 
+	db.bytesWrite += uint(size)
 	// 看用户是否每次进行写入后都想要进行持久化，根据用户配置决定
+	var needSync = db.options.SyncWrites
+	// 如果没有打开每次持久化，并且写入字节数持久化>0
+	if !needSync && db.options.BytesPerSync > 0 && db.bytesWrite >= db.options.BytesPerSync {
+		needSync = true
+	}
 	if db.options.SyncWrites {
 		if err := db.activeFile.Sync(); err != nil {
 			return nil, err
+		}
+		// 清空累计值
+		if db.bytesWrite > 0 {
+			db.bytesWrite = 0
 		}
 	}
 
@@ -371,7 +410,7 @@ func (db *DB) setActiveDataFile() error {
 	}
 
 	// 打开新的数据文件
-	dataFile, err := data.OpenDataFile(db.options.DirPath, initialFileID)
+	dataFile, err := data.OpenDataFile(db.options.DirPath, initialFileID, fio.StandardFIO)
 	if err != nil {
 		return err
 	}
@@ -380,7 +419,7 @@ func (db *DB) setActiveDataFile() error {
 }
 
 // 从磁盘中加载数据文件
-func (db *DB) OpenDataFiles() error {
+func (db *DB) loadDataFiles() error {
 	// 读取目录中的所有条目
 	dirEntries, err := os.ReadDir(db.options.DirPath)
 	if err != nil {
@@ -395,7 +434,7 @@ func (db *DB) OpenDataFiles() error {
 			splitNames := strings.Split(entry.Name(), ".")
 			fmt.Println(splitNames, splitNames[0])
 			// 包strconv实现了与基本数据类型的字符串表示形式之间的转换，Atoi相当于ParseInt（s,10,0），转换为int类型。
-			// 这里乱码了
+			// 这里乱码了，原因是写文件名的时候代码有错误
 			fileId, err := strconv.Atoi(splitNames[0])
 			// 数据目录有可能被损坏了
 			if err != nil {
@@ -413,7 +452,11 @@ func (db *DB) OpenDataFiles() error {
 
 	// 遍历每个文件 id，打开对应的数据文件
 	for i, fid := range fileIds {
-		dataFile, err := data.OpenDataFile(db.options.DirPath, uint32(fid))
+		ioType := fio.StandardFIO
+		if db.options.MMapAtStartup {
+			ioType = fio.MemoryMap
+		}
+		dataFile, err := data.OpenDataFile(db.options.DirPath, uint32(fid), ioType)
 		if err != nil {
 			return err
 		}
@@ -576,5 +619,22 @@ func (db *DB) loadSeqNo() error {
 	}
 	db.seqNo = seqNo
 	db.seqNoFileExists = true
+	return nil
+}
+
+// 将数据文件的 IO 类型设置为标准文件 IO
+func (db *DB) resetIoType() error {
+	if db.activeFile == nil {
+		return nil
+	}
+
+	if err := db.activeFile.SetIOManager(db.options.DirPath, fio.StandardFIO); err != nil {
+		return err
+	}
+	for _, dataFile := range db.olderFiles {
+		if err := dataFile.SetIOManager(db.options.DirPath, fio.StandardFIO); err != nil {
+			return err
+		}
+	}
 	return nil
 }
