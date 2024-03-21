@@ -95,7 +95,7 @@ func (wb *WriteBatch) Commit() error {
 	seqNo := atomic.AddUint64(&wb.db.seqNo, 1)
 
 	// 开始写数据到数据文件当中
-	position := make(map[string]*data.LogRecordPos)
+	positions := make(map[string]*data.LogRecordPos)
 	for _, record := range wb.pendingWrites {
 		logRecordPos, err := wb.db.appendLogRecord(&data.LogRecord{
 			Key:   logRecordKeyWithSeq(record.Key, seqNo),
@@ -106,7 +106,7 @@ func (wb *WriteBatch) Commit() error {
 			return err
 		}
 		// 索引等到所有数据写完再更新，所以先暂时将他们暂存起来
-		position[string(record.Key)] = logRecordPos
+		positions[string(record.Key)] = logRecordPos
 
 	}
 	// 写一条标识事务完成提交的数据，是保证原子性的关键
@@ -128,12 +128,16 @@ func (wb *WriteBatch) Commit() error {
 
 	// 更新内存索引
 	for _, record := range wb.pendingWrites {
-		pos := position[string(record.Key)]
+		pos := positions[string(record.Key)]
+		var oldPos *data.LogRecordPos
 		if record.Type == data.LogRecordNormal {
-			wb.db.index.Put(record.Key, pos)
+			oldPos = wb.db.index.Put(record.Key, pos)
 		}
 		if record.Type == data.LogRecordDeleted {
-			wb.db.index.Delete(record.Key)
+			oldPos, _ = wb.db.index.Delete(record.Key)
+		}
+		if oldPos != nil {
+			wb.db.reclaimSize += int64(oldPos.Size)
 		}
 	}
 

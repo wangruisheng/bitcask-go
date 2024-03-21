@@ -41,16 +41,22 @@ func NewBPlusTree(dirPath string, syncWrites bool) *BPlusTree {
 	}
 }
 
-func (bpt *BPlusTree) Put(key []byte, pos *data.LogRecordPos) bool {
+func (bpt *BPlusTree) Put(key []byte, pos *data.LogRecordPos) *data.LogRecordPos {
+	// 因为bptree自带的方法里put数据时，不会返回旧的值，所以我们先把旧的值储存起来
+	var oldVal []byte
 	// 取出对应的 bucket，用bucket读写数据
 	if err := bpt.tree.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(indexBucketName)
+		oldVal = bucket.Get(key)
 		// key 和 value 都只能是 byte数组，所以要对pos进行编码
 		return bucket.Put(key, data.EncodeLogRecordPos(pos))
 	}); err != nil {
 		panic("failed to put value in bptree")
 	}
-	return true
+	if len(oldVal) == 0 {
+		return nil
+	}
+	return data.DecodeLogRecordPos(oldVal)
 }
 
 func (bpt *BPlusTree) Get(key []byte) *data.LogRecordPos {
@@ -70,20 +76,22 @@ func (bpt *BPlusTree) Get(key []byte) *data.LogRecordPos {
 	return pos
 }
 
-func (bpt *BPlusTree) Delete(key []byte) bool {
-	var ok bool = false
+func (bpt *BPlusTree) Delete(key []byte) (*data.LogRecordPos, bool) {
+	var oldVal []byte
 	if err := bpt.tree.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(indexBucketName)
 		// key 和 value 都只能是 byte数组，所以要对pos进行编码
-		if value := bucket.Get(key); len(value) != 0 {
-			ok = true
+		if oldVal = bucket.Get(key); len(oldVal) != 0 {
 			return bucket.Delete(key)
 		}
 		return nil
 	}); err != nil {
 		panic("failed to delete value in bptree")
 	}
-	return ok
+	if len(oldVal) == 0 {
+		return nil, false
+	}
+	return data.DecodeLogRecordPos(oldVal), true
 }
 
 func (bpt *BPlusTree) Size() int {

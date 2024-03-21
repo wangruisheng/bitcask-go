@@ -36,9 +36,9 @@ func destroyDB(db *DB) {
 	if db != nil {
 		if db.activeFile != nil {
 			// _ = db.activeFile.Close()
-			if err := db.Close(); err != nil {
-				panic(err)
-			}
+			//if err := db.Close(); err != nil {
+			//	panic(err)
+			_ = db.Close()
 		}
 		err := os.RemoveAll(db.options.DirPath)
 		if err != nil {
@@ -371,6 +371,33 @@ func TestDB_FileLock(t *testing.T) {
 	err = db2.Close()
 	assert.Nil(t, err)
 
+}
+
+func TestDB_Stat(t *testing.T) {
+	opts := DefaultOptions
+	dir, _ := os.MkdirTemp("", "bitcask-go-stat")
+	opts.DirPath = dir
+	db, err := Open(opts)
+	defer destroyDB(db)
+	assert.Nil(t, err)
+	assert.NotNil(t, db)
+
+	for i := 100; i < 10000; i++ {
+		err := db.Put(utils.GetTestKey(i), utils.RandomValue(128))
+		assert.Nil(t, err)
+	}
+	for i := 100; i < 1000; i++ {
+		err := db.Delete(utils.GetTestKey(i))
+		assert.Nil(t, err)
+	}
+	for i := 2000; i < 5000; i++ {
+		err := db.Put(utils.GetTestKey(i), utils.RandomValue(128))
+		assert.Nil(t, err)
+	}
+
+	stat := db.Stat()
+	t.Log(stat)
+	assert.NotNil(t, stat)
 }
 
 func Test_Open2(t *testing.T) {

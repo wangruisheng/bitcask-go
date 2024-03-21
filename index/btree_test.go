@@ -10,31 +10,37 @@ import (
 func TestBTree_Put(t *testing.T) {
 	bt := NewBTree()
 
-	res1 := bt.Put(nil, &data.LogRecordPos{1, 100})
+	res1 := bt.Put(nil, &data.LogRecordPos{1, 100, 10})
 	// 引入断言库
-	assert.True(t, res1)
+	assert.Nil(t, res1)
 
-	res2 := bt.Put([]byte{'a'}, &data.LogRecordPos{1, 100})
+	res2 := bt.Put([]byte{'a'}, &data.LogRecordPos{1, 100, 10})
 	// 引入断言库
-	assert.True(t, res2)
+	assert.Nil(t, res2)
+
+	res3 := bt.Put([]byte{'a'}, &data.LogRecordPos{2, 1111, 20})
+	// 引入断言库
+	// 拿到的是旧的被替换的值
+	t.Log(res3)
 
 }
 
 func TestBTree_Get(t *testing.T) {
 	bt := NewBTree()
 
-	res1 := bt.Put(nil, &data.LogRecordPos{1, 100})
-	assert.True(t, res1)
+	res1 := bt.Put(nil, &data.LogRecordPos{1, 100, 10})
+	assert.Nil(t, res1)
 
 	pos1 := bt.Get(nil)
 	assert.Equal(t, uint32(1), pos1.Fid)
 	assert.Equal(t, int64(100), pos1.Offset)
 
 	// 存两次看是否覆盖
-	res2 := bt.Put([]byte{'a'}, &data.LogRecordPos{1, 2})
-	assert.True(t, res2)
-	res3 := bt.Put([]byte{'a'}, &data.LogRecordPos{1, 3})
-	assert.True(t, res3)
+	res2 := bt.Put([]byte{'a'}, &data.LogRecordPos{1, 2, 10})
+	assert.Nil(t, res2)
+	res3 := bt.Put([]byte{'a'}, &data.LogRecordPos{1, 3, 10})
+	assert.Equal(t, uint32(1), res3.Fid)
+	assert.Equal(t, int64(2), res3.Offset)
 
 	pos2 := bt.Get([]byte{'a'})
 	// t.Log(pos2)
@@ -45,10 +51,24 @@ func TestBTree_Get(t *testing.T) {
 
 func TestBTree_Delete(t *testing.T) {
 	bt := NewBTree()
-	res1 := bt.Put([]byte{'a'}, &data.LogRecordPos{1, 100})
-	assert.True(t, res1)
-	res2 := bt.Put([]byte{'a'}, &data.LogRecordPos{1, 100})
-	assert.True(t, res2)
+
+	res1 := bt.Put(nil, &data.LogRecordPos{1, 999, 10})
+	assert.Nil(t, res1)
+	res2, ok := bt.Delete(nil)
+	assert.True(t, ok)
+	assert.Equal(t, uint32(1), res2.Fid)
+	assert.Equal(t, int64(999), res2.Offset)
+	// t.Log(res2)
+
+	res3 := bt.Put([]byte{'a'}, &data.LogRecordPos{1, 100, 10})
+	assert.Nil(t, res3)
+	res4, ok := bt.Delete([]byte{'a'})
+	assert.True(t, ok)
+	assert.Equal(t, uint32(1), res4.Fid)
+	assert.Equal(t, int64(100), res4.Offset)
+
+	res5 := bt.Put([]byte{'a'}, &data.LogRecordPos{1, 200, 10})
+	assert.Nil(t, res5)
 
 }
 
@@ -59,7 +79,7 @@ func TestBTree_Iterator(t *testing.T) {
 	assert.Equal(t, false, iter1.Valid())
 
 	// 2、BTree 有数据的情况
-	bt1.Put([]byte("code1"), &data.LogRecordPos{1, 10})
+	bt1.Put([]byte("code1"), &data.LogRecordPos{1, 10, 20})
 	// 更新了数据，每次都要重新获取
 	iter2 := bt1.Iterator(false)
 	assert.Equal(t, true, iter2.Valid())
@@ -69,9 +89,9 @@ func TestBTree_Iterator(t *testing.T) {
 	assert.Equal(t, false, iter2.Valid())
 
 	// 有多条数据
-	bt1.Put([]byte("code2"), &data.LogRecordPos{1, 10})
-	bt1.Put([]byte("code3"), &data.LogRecordPos{1, 10})
-	bt1.Put([]byte("code4"), &data.LogRecordPos{1, 10})
+	bt1.Put([]byte("code2"), &data.LogRecordPos{1, 10, 20})
+	bt1.Put([]byte("code3"), &data.LogRecordPos{1, 10, 30})
+	bt1.Put([]byte("code4"), &data.LogRecordPos{1, 10, 40})
 	iter3 := bt1.Iterator(false)
 	for iter3.Rewind(); iter3.Valid(); iter3.Next() {
 		log.Print("key=" + string(iter3.Key()))

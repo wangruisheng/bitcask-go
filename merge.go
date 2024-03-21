@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"myRosedb/data"
+	"myRosedb/utils"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,6 +28,21 @@ func (db *DB) Merge() error {
 		db.mu.Unlock()
 		return ErrMergeIsProgress
 	}
+
+	// 查看可以 merge 的数据是否达到了阈值
+	totalSize, err := utils.DirSize(db.options.DirPath)
+	if err != nil {
+		db.mu.Unlock()
+		return err
+	}
+	if float32(db.reclaimSize)/float32(totalSize) < db.options.DataFileMergeRatio {
+		db.mu.Unlock()
+		return ErrMergeRatioUnreached
+	}
+
+	// 查看剩余空间容量食肉可以容纳 merge 之后的数据量
+	// todo
+
 	db.isMerging = true
 	defer func() {
 		db.isMerging = false
@@ -187,6 +203,9 @@ func (db *DB) loadMergeFile() error {
 			mergeFinished = true
 		}
 		if entry.Name() == data.SeqNoFileName {
+			continue
+		}
+		if entry.Name() == fileLockName {
 			continue
 		}
 		mergeFileNames = append(mergeFileNames, entry.Name())

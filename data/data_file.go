@@ -84,6 +84,8 @@ func (df *DataFile) ReadLogRecord(offset int64) (*LogRecord, int64, error) {
 	}
 
 	// 头部都是变长的，那怎么知道头部长度是多少
+	// 先读最大的值，返回回来的byte[]里一定包含着应该有的头部信息
+	// 再用decodeLogRecordHeader()方法对该byte数组进行解析，得到实际的头部长度以及value长度
 	var headerBytes int64 = maxLogRecordHeaderSize
 	if offset+maxLogRecordHeaderSize > fileSize {
 		headerBytes = fileSize - offset
@@ -95,6 +97,7 @@ func (df *DataFile) ReadLogRecord(offset int64) (*LogRecord, int64, error) {
 		return nil, 0, err
 	}
 	// 读出来的头是编码过得，我们要进行解码
+	// 得到实际的header
 	header, headerSize := decodeLogRecordHeader(headerBuf)
 	// ??? 这里最开始怎么忘加了，导致文件已经读到最后，返回的header=nil时一直报错
 	if header == nil {
