@@ -222,6 +222,13 @@ func (db *DB) Stat() *Stat {
 	}
 }
 
+// Backup 备份数据库，将数据文件拷贝到新的目录中
+func (db *DB) Backup(dir string) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return utils.CopyDir(db.options.DirPath, dir, []string{fileLockName})
+}
+
 // 写入 Key/Value 数据，Key 不能为空
 // db 中的put和delete没有对key和seqNo进行编码，因为他是非事务的
 func (db *DB) Put(key []byte, value []byte) error {
