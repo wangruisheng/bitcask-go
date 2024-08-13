@@ -4,7 +4,9 @@ import (
 	"encoding/binary"
 	"errors"
 	bitcask_go "myRosedb"
+	"myRosedb/index"
 	"myRosedb/utils"
+	"sync"
 	"time"
 )
 
@@ -25,6 +27,8 @@ const (
 // RedisDataStructure Redis 数据结构数据
 type RedisDataStructure struct {
 	db *bitcask_go.DB
+	// Redis数据结构使用的索引
+	zSetIndex *zSetIndexer
 }
 
 func NewRedisDataStructure(option bitcask_go.Options) (*RedisDataStructure, error) {
@@ -37,6 +41,18 @@ func NewRedisDataStructure(option bitcask_go.Options) (*RedisDataStructure, erro
 
 func (rds *RedisDataStructure) Close() error {
 	return rds.db.Close()
+}
+
+type zSetIndexer struct {
+	mu  *sync.Mutex
+	idx *index.SortedSet
+}
+
+func NewZSetIndexer() *zSetIndexer {
+	return &zSetIndexer{
+		mu:  new(sync.Mutex),
+		idx: index.NewSortedSet(),
+	}
 }
 
 // ================================ String 数据结构 ================================
@@ -443,6 +459,47 @@ func (rds *RedisDataStructure) ZScore(key []byte, member []byte) (float64, error
 	}
 
 	return utils.FloatFromBytes(value), nil
+}
+
+func (rds *RedisDataStructure) ZRem(key []byte, member []byte) (bool, error) {
+	meta, err := rds.findMetadata(key, ZSet)
+	if err != nil {
+		return false, err
+	}
+	if meta.size == 0 {
+		return false, nil
+	}
+
+	zk := &zsetInternalKey{
+		key:     key,
+		version: meta.version,
+		member:  member,
+	}
+	value, err := rds.db.Get(zk.encodeWithMember())
+	if err != nil && err != bitcask_go.ErrKeyNotFound {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	zk.score = utils.FloatFromBytes(value)
+
+	// 更新
+	wb := rds.db.NewWriteBatch(bitcask_go.DefaultWriteBatchOptions)
+	meta.size--
+	_ = wb.Put(key, meta.encode())
+	_ = wb.Delete(zk.encodeWithMember())
+	_ = wb.Delete(zk.encodeWithScore())
+	if err := wb.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (rds *RedisDataStructure) ZAdd2(key []byte, score float64, member []byte) (bool, error) {
+	// 向磁盘追加
+
+	// 向索引追加
 }
 
 func (rds *RedisDataStructure) findMetadata(key []byte, dataType radisDataType) (*metadata, error) {
