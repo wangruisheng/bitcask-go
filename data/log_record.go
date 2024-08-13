@@ -34,8 +34,8 @@ type LogRecord struct {
 type logRecordHeader struct {
 	crc        uint32        // crc校验值
 	recordType LogRecordType // 表示 logRecord 的类型
-	keySize    uint32        // key 的长度
-	valueSize  uint32        // value 的长度
+	keySize    uint32        // key 的长度，key的最大值为3.99G
+	valueSize  uint32        // value 的长度，value最大值为3.99G
 }
 
 // LogRecordPos 数据内存索引，主要是描述数据在磁盘上的位置
