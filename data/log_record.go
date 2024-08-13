@@ -133,6 +133,9 @@ func decodeLogRecordHeader(buf []byte) (*logRecordHeader, int64) {
 	// 从第六个字节开始拿 key size 和 value size
 	// 取出实际的key size
 	// 它怎么知道要反序列化多少个字节？？？
+	// binary.Varint 函数是用来解析字节切片中的有符号整数的，它会根据变长编码的规则来解析整数值。
+	//在变长编码中，整数的每个字节的最高位用来表示是否还有后续字节，如果最高位是1，则表示还有后续字节，如果是0，则表示这是最后一个字节。
+	//这样，binary.Varint 函数就可以根据这个规则来解析整数值，并确定整数所占的字节数。
 	keySize, n := binary.Varint(buf[index:])
 	header.keySize = uint32(keySize)
 	index += n

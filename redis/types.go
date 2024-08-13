@@ -92,7 +92,7 @@ func (rds *RedisDataStructure) Get(key []byte) ([]byte, error) {
 // ================================ Hash 数据结构 ================================
 
 func (rds *RedisDataStructure) HSet(key, field, value []byte) (bool, error) {
-	// 先查找元数据
+	// 先查找元数据 ？疑问：如果hash和set数据结构的元数据key相同，那么会直接报错吗，会报错。同时只能有一种数据结构有唯一的key
 	meta, err := rds.findMetadata(key, Hash)
 	if err != nil {
 		return false, err
