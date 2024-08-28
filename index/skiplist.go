@@ -8,6 +8,8 @@ import (
 const (
 	MaxLevel    int     = 32   // 最大的 level 数
 	Probability float64 = 0.25 // 生成下一个节点的概率是0.25
+	GE          int     = 0    // greater than or equal to
+	LE          int     = 1    // less than or equal to 小于等于
 )
 
 type SkipList struct {
@@ -48,11 +50,42 @@ func NewSkipListNode(member string, score float64, level int) *skipListNode {
 	}
 }
 
+// 寻找节点
+// opt == 0，找到第一个 >= score 的节点
+// opt == 1，找到最后一个 <= score 的节点
 func (sl *SkipList) Find(score float64, opt int) *skipListNode {
+	x := sl.head
 
+	// 查找节点
+	if opt == GE {
+		for i := sl.level - 1; i >= 0; i-- {
+			// 找到目标节点的上一个节点
+			// 不用做score相等，按member找的判断。因为满足第一个 >= score 的节点即可
+			// 不能是 x.next[i].score <= score，不然就会找到满足最后一个 >= score 的节点
+			for x.next[i] != nil && (x.next[i].score < score) {
+				x = x.next[i]
+			}
+			x = x.next[i]
+			if x != nil && x.score >= score {
+				return x
+			}
+		}
+	} else {
+		for i := sl.level - 1; i >= 0; i-- {
+			// 如果有 0 1 2 2 2 3，score为2
+			// 会找到：       ——
+			for x.next[i] != nil && (x.next[i].score <= score) {
+				x = x.next[i]
+			}
+			if x != nil && x.score <= score {
+			}
+			return x
+		}
+	}
+	return nil
 }
 
-func (sl *SkipList) Insert(member string, score float64) *skipListNode {
+func (sl *SkipList) Insert(score float64, member string) *skipListNode {
 
 	// 将每一层的前置节点存放在update当中
 	update := make([]*skipListNode, MaxLevel)
@@ -94,7 +127,7 @@ func (sl *SkipList) Insert(member string, score float64) *skipListNode {
 	return newNode
 }
 
-func (sl *SkipList) Delete(member string, score float64) {
+func (sl *SkipList) Delete(score float64, member string) {
 
 	// 存储要删除的上一个节点
 	update := make([]*skipListNode, MaxLevel)
